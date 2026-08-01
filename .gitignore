@@ -1,0 +1,15 @@
+node_modules/
+.next/
+frontend/node_modules/
+frontend/.next/
+__pycache__/
+*.pyc
+.env
+.venv/
+dist/
+build/
+backend/artifacts/*
+!backend/artifacts/.gitkeep
+backend/data/*.csv
+backend/data/*.zip
+!backend/data/.gitkeep

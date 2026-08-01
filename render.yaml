@@ -1,0 +1,20 @@
+services:
+  - type: web
+    name: eco-logic-api
+    env: python
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: ECOLOGIC_DATA_DIR
+        value: /opt/render/project/src/backend/data
+      - key: ECOLOGIC_ARTIFACTS_DIR
+        value: /var/data/eco-logic-artifacts
+      - key: ECOLOGIC_CORS_ORIGINS
+        sync: false
+      - key: ECOLOGIC_CACHE_ENABLED
+        value: true
+    disk:
+      name: eco-logic-artifacts
+      mountPath: /var/data
+      sizeGB: 1
