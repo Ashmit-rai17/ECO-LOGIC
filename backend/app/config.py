@@ -13,8 +13,8 @@ class Settings(BaseSettings):
     cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
     max_points: int = 2200
     shap_sample_size: int = 600
-    xgb_n_estimators: int = 4000
-    xgb_early_stopping_rounds: int = 100
+    xgb_n_estimators: int = 500
+    xgb_early_stopping_rounds: int = 50
 
     model_config = SettingsConfigDict(env_prefix="ECOLOGIC_", env_file=".env")
 
