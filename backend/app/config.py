@@ -15,6 +15,8 @@ class Settings(BaseSettings):
     shap_sample_size: int = 200
     xgb_n_estimators: int = 200
     xgb_early_stopping_rounds: int = 30
+    enable_model_comparison: bool = True
+    enable_shap: bool = True
 
     model_config = SettingsConfigDict(env_prefix="ECOLOGIC_", env_file=".env")
 

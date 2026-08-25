@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gc
 from functools import lru_cache
 
 import pandas as pd
@@ -43,8 +44,11 @@ def compute_artifacts(key: str) -> dict:
     model_df = build_features(df)
     splits = temporal_split(model_df)
     model, model_info = fit_xgboost(splits, settings.xgb_n_estimators, settings.xgb_early_stopping_rounds)
+    gc.collect()
     forecast_result = forecast(splits, model)
-    model_comparison = compare_models(splits, forecast_result["testMetrics"])
+    gc.collect()
+    model_comparison = compare_models(splits, forecast_result["testMetrics"]) if settings.enable_model_comparison else []
+    gc.collect()
     dashboard = forecast_result["dashboard"]
     x_valid = splits["valid"].drop(columns=[TARGET])
 
@@ -114,7 +118,7 @@ def compute_dataset(key: str) -> dict:
             "baselineImprovement": forecast_result["baselineImprovement"],
             "series": forecast_series(dashboard, settings.max_points),
         },
-        "explainability": shap_summary(model, x_valid, settings.shap_sample_size),
+        "explainability": shap_summary(model, x_valid, settings.shap_sample_size) if settings.enable_shap else {"available": False, "message": "SHAP disabled for memory constraints.", "beeswarm": [], "dependence": [], "dependenceFeature": None, "waterfall": []},
         "errors": {
             "groups": error_groups(dashboard),
             "heatmap": error_heatmap(dashboard),
