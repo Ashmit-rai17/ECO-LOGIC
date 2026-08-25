@@ -11,10 +11,10 @@ class Settings(BaseSettings):
     artifacts_dir: Path = BACKEND_DIR / "artifacts"
     cache_enabled: bool = True
     cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
-    max_points: int = 2200
-    shap_sample_size: int = 600
-    xgb_n_estimators: int = 500
-    xgb_early_stopping_rounds: int = 50
+    max_points: int = 1200
+    shap_sample_size: int = 200
+    xgb_n_estimators: int = 200
+    xgb_early_stopping_rounds: int = 30
 
     model_config = SettingsConfigDict(env_prefix="ECOLOGIC_", env_file=".env")
 

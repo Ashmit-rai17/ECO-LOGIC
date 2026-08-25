@@ -37,7 +37,7 @@ def fit_xgboost(splits: dict, n_estimators: int, early_stopping_rounds: int) -> 
         eval_metric="mae",
         early_stopping_rounds=early_stopping_rounds,
         random_state=42,
-        n_jobs=-1,
+        n_jobs=1,
     )
     model.fit(x_train, y_train, eval_set=[(x_train, y_train), (x_valid, y_valid)], verbose=False)
     return model, {
@@ -80,7 +80,7 @@ def compare_models(splits: dict, xgboost_metrics: dict) -> list[dict]:
     train = splits["train"]
     valid = splits["valid"]
     test = splits["test"]
-    comparison_train = train.tail(min(35000, len(train)))
+    comparison_train = train.tail(min(10000, len(train)))
     x_train = comparison_train.drop(columns=[TARGET])
     y_train = comparison_train[TARGET]
     x_test = test.drop(columns=[TARGET])
@@ -105,11 +105,11 @@ def compare_models(splits: dict, xgboost_metrics: dict) -> list[dict]:
             "Random Forest",
             "Bagged decision trees",
             RandomForestRegressor(
-                n_estimators=90,
-                max_depth=18,
-                min_samples_leaf=2,
+                n_estimators=50,
+                max_depth=12,
+                min_samples_leaf=5,
                 random_state=42,
-                n_jobs=-1,
+                n_jobs=1,
             ),
         ),
     ]
@@ -122,13 +122,13 @@ def compare_models(splits: dict, xgboost_metrics: dict) -> list[dict]:
                 "LightGBM",
                 "Gradient boosted trees",
                 LGBMRegressor(
-                    n_estimators=800,
+                    n_estimators=200,
                     learning_rate=0.05,
-                    num_leaves=64,
+                    num_leaves=31,
                     subsample=0.8,
                     colsample_bytree=0.8,
                     random_state=42,
-                    n_jobs=-1,
+                    n_jobs=1,
                     verbose=-1,
                 ),
             )

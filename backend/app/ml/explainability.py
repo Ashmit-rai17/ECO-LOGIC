@@ -27,7 +27,7 @@ def shap_summary(model: XGBRegressor, x_valid: pd.DataFrame, sample_size: int) -
                 "shapValue": shap_frame[top_feature],
                 "timestamp": sample.index.astype(str),
             }
-        ).sample(min(500, len(sample)), random_state=42)
+        ).sample(min(200, len(sample)), random_state=42)
         waterfall_row = shap_frame.iloc[-1].abs().sort_values(ascending=False).head(12).index
         return {
             "available": True,
