@@ -18,7 +18,7 @@ class DatasetInfo:
 
 def discover_datasets(data_dir: Path) -> list[DatasetInfo]:
     candidates: dict[str, DatasetInfo] = {}
-    for path in sorted(data_dir.glob("*_hourly.csv*")):
+    for path in sorted(data_dir.glob("*_hourly*")):
         if path.suffix not in {".csv", ".zip"}:
             continue
         key = path.name.split("_hourly")[0].replace(" (1)", "").upper()
