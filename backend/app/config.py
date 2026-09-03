@@ -13,8 +13,8 @@ class Settings(BaseSettings):
     cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
     max_points: int = 800
     shap_sample_size: int = 100
-    xgb_n_estimators: int = 150
-    xgb_early_stopping_rounds: int = 20
+    xgb_n_estimators: int = 200
+    xgb_early_stopping_rounds: int = 25
     enable_model_comparison: bool = True
     enable_shap: bool = True
     walk_forward_folds: int = 3
