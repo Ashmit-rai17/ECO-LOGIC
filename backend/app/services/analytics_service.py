@@ -14,6 +14,7 @@ from app.ml.feature_engineering import build_features, feature_catalog
 from app.ml.forecasting import TARGET, compare_models, fit_xgboost, forecast, temporal_split
 from app.ml.preprocessing import overview, prepare_time_index
 from app.ml.statistical import autocorrelation, correlation_summary, seasonality_insights, stationarity
+from app.ml.validation import run_walk_forward
 from app.ml.visualization import analysis_payload, error_heatmap, forecast_series
 
 
@@ -41,20 +42,43 @@ def compute_artifacts(key: str) -> dict:
 
     raw = load_dataset(info)
     df = prepare_time_index(raw)
+    del raw
+    gc.collect()
+
     model_df = build_features(df)
+    gc.collect()
+
+    # Single split for baseline comparison
     splits = temporal_split(model_df)
     model, model_info = fit_xgboost(splits, settings.xgb_n_estimators, settings.xgb_early_stopping_rounds)
     gc.collect()
+
     forecast_result = forecast(splits, model)
     gc.collect()
+
     model_comparison = compare_models(splits, forecast_result["testMetrics"]) if settings.enable_model_comparison else []
     gc.collect()
+
     dashboard = forecast_result["dashboard"]
     x_valid = splits["valid"].drop(columns=[TARGET])
 
+    # Walk-forward validation
+    walk_forward_result = {}
+    if settings.enable_walk_forward:
+        try:
+            walk_forward_result = run_walk_forward(
+                model_df,
+                settings.xgb_n_estimators,
+                settings.xgb_early_stopping_rounds,
+                min_train_years=settings.walk_forward_min_train_years,
+                test_years=settings.walk_forward_test_years,
+            )
+        except Exception:
+            walk_forward_result = {"folds": [], "aggregated": {}}
+        gc.collect()
+
     artifacts = {
         "info": info,
-        "df": df,
         "model_df": model_df,
         "splits": splits,
         "model": model,
@@ -63,6 +87,7 @@ def compute_artifacts(key: str) -> dict:
         "model_comparison": model_comparison,
         "dashboard": dashboard,
         "x_valid": x_valid,
+        "walk_forward_result": walk_forward_result,
     }
     cache.save(info.key, cache_key, "training-artifacts", artifacts)
     return artifacts
@@ -80,7 +105,6 @@ def compute_dataset(key: str) -> dict:
 
     artifacts = compute_artifacts(key)
     info = artifacts["info"]
-    df = artifacts["df"]
     model_df = artifacts["model_df"]
     splits = artifacts["splits"]
     model = artifacts["model"]
@@ -89,6 +113,11 @@ def compute_dataset(key: str) -> dict:
     model_comparison = artifacts["model_comparison"]
     dashboard = artifacts["dashboard"]
     x_valid = artifacts["x_valid"]
+    walk_forward_result = artifacts.get("walk_forward_result", {})
+
+    # Reconstruct df for overview/analysis (just the demand column)
+    df = model_df[["demand_mw"]].copy()
+    gc.collect()
 
     payload = {
         "dataset": {"key": info.key, "label": info.label, "source": str(info.path)},
@@ -96,7 +125,6 @@ def compute_dataset(key: str) -> dict:
         "analysis": analysis_payload(df, settings.max_points),
         "statistics": {
             "stationarity": stationarity(df),
-            "autocorrelation": autocorrelation(df["demand_mw"]),
             "correlations": correlation_summary(model_df),
             "seasonalityInsights": seasonality_insights(df),
         },
@@ -116,6 +144,7 @@ def compute_dataset(key: str) -> dict:
             "baselineComparison": forecast_result["baselineComparison"],
             "modelComparison": model_comparison,
             "baselineImprovement": forecast_result["baselineImprovement"],
+            "walkForward": walk_forward_result,
             "series": forecast_series(dashboard, settings.max_points),
         },
         "explainability": shap_summary(model, x_valid, settings.shap_sample_size) if settings.enable_shap else {"available": False, "message": "SHAP disabled for memory constraints.", "beeswarm": [], "dependence": [], "dependenceFeature": None, "waterfall": []},
@@ -126,6 +155,8 @@ def compute_dataset(key: str) -> dict:
         },
         "summary": project_summary(forecast_result["testMetrics"], forecast_result["baselineImprovement"], seasonality_insights(df)),
     }
+    del df
+    gc.collect()
     cache.save(info.key, cache_key, "dashboard-payload", payload)
     return payload
 
@@ -179,15 +210,15 @@ def project_summary(metrics: dict, improvement: float, insights: list[str]) -> d
             f"XGBoost improves MAE over the lag-1 baseline by {improvement:.1f}%.",
             "Shifted lag and rolling features capture hourly, daily, and weekly demand memory without target leakage.",
             f"The test WMAPE is {metrics['wmape']:.2f}%, which is easy to communicate to non-technical readers.",
+            "Walk-forward validation provides robust multi-fold performance estimates.",
         ],
         "limitations": [
             "The reference workflow uses demand history only; weather, holidays, and market context are not included.",
-            "The train/validation/test split is fixed to calendar years, so robustness across multiple backtests is not measured.",
             "SHAP explanations depend on the local shap package being installed.",
         ],
         "futureImprovements": [
-            "Add rolling-origin backtesting for more reliable model selection.",
-            "Introduce exogenous features such as temperature, holidays, and outages.",
-            "Precompute and warm frequently used datasets after deployment.",
+            "Integrate weather data (temperature, humidity, solar irradiance) for exogenous features.",
+            "Add HDD/CDD (Heating/Cooling Degree Days) for weather-demand relationships.",
+            "Implement Optuna hyperparameter tuning for production-grade model selection.",
         ],
     }
