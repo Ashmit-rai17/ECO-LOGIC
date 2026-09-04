@@ -1,4 +1,37 @@
-export const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000";
+/**
+ * API client for the EcoLogic ML backend.
+ *
+ * Talks to a Gradio app via its auto-generated HTTP API:
+ *   POST /api/{fn_name}   Body: {"data": [arg1, ...]}   Response: {"data": [result]}
+ */
+
+export const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:7860";
+
+// ---------------------------------------------------------------------------
+// Gradio helper
+// ---------------------------------------------------------------------------
+
+async function gradioPost<T>(fnName: string, args: unknown[]): Promise<T> {
+  const response = await fetch(`${API_BASE}/api/${fnName}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ data: args }),
+    cache: "no-store",
+  });
+  if (!response.ok) {
+    const detail = await response.json().catch(() => ({}));
+    throw new Error(detail.detail ?? `Request to ${fnName} failed (${response.status})`);
+  }
+  const body = await response.json();
+  // Gradio wraps results in {"data": [result]}.  Our functions return JSON
+  // strings, so the first element is a string we need to parse.
+  const raw: unknown = Array.isArray(body.data) ? body.data[0] : body.data;
+  return typeof raw === "string" ? (JSON.parse(raw) as T) : (raw as T);
+}
+
+// ---------------------------------------------------------------------------
+// Public helpers (same signatures the rest of the app already uses)
+// ---------------------------------------------------------------------------
 
 export type Dataset = {
   key: string;
@@ -7,28 +40,23 @@ export type Dataset = {
 };
 
 export async function fetchDatasets(): Promise<Dataset[]> {
-  const response = await fetch(`${API_BASE}/api/datasets`, { cache: "no-store" });
-  if (!response.ok) throw new Error("Unable to load datasets");
-  return response.json();
+  return gradioPost<Dataset[]>("list_datasets", []);
 }
 
 export async function fetchAnalytics(datasetKey: string): Promise<AnalyticsPayload> {
-  const response = await fetch(`${API_BASE}/api/datasets/${datasetKey}/analytics`, { cache: "no-store" });
-  if (!response.ok) {
-    const detail = await response.json().catch(() => ({}));
-    throw new Error(detail.detail ?? "Unable to compute analytics");
-  }
-  return response.json();
+  return gradioPost<AnalyticsPayload>("get_analytics", [datasetKey]);
 }
 
-export async function fetchPrediction(datasetKey: string, date: string): Promise<PredictionPayload> {
-  const response = await fetch(`${API_BASE}/api/datasets/${datasetKey}/predict?date=${encodeURIComponent(date)}`, { cache: "no-store" });
-  if (!response.ok) {
-    const detail = await response.json().catch(() => ({}));
-    throw new Error(detail.detail ?? "Unable to compute prediction");
-  }
-  return response.json();
+export async function fetchPrediction(
+  datasetKey: string,
+  date: string,
+): Promise<PredictionPayload> {
+  return gradioPost<PredictionPayload>("predict", [datasetKey, date]);
 }
+
+// ---------------------------------------------------------------------------
+// Types (unchanged)
+// ---------------------------------------------------------------------------
 
 export type Point = Record<string, number | string>;
 
@@ -69,6 +97,7 @@ export type AnalyticsPayload = {
     baselineComparison: { model: string; mae: number }[];
     modelComparison: ModelComparisonRow[];
     baselineImprovement: number;
+    walkForward?: Record<string, unknown>;
     series: { full: Point[]; zoom: Point[]; worstPredictions: Point[] };
   };
   explainability: {
