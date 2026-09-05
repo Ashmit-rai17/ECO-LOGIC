@@ -4,8 +4,6 @@ __pycache__
 .git
 .gitignore
 .env
-*.md
 artifacts/
-data/*.csv
-data/*.zip
+*.md
 .DS_Store

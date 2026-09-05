@@ -1,25 +1,25 @@
-FROM python:3.11-slim
+FROM python:3.10-slim
 
 WORKDIR /app
 
-# Install system dependencies
+# Install system dependencies for scikit-learn, xgboost, etc.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc g++ && \
+    gcc g++ libgomp1 && \
     rm -rf /var/lib/apt/lists/*
 
 # Install Python dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy backend code
+# Copy backend code and data
 COPY . .
 
-# Create data and artifacts directories
-RUN mkdir -p /app/data /app/artifacts
+# Create artifacts directory for model cache
+RUN mkdir -p /app/artifacts
 
-# Expose port (HF Spaces uses 7860, Railway/Render use $PORT)
-ENV PORT=7860
-EXPOSE $PORT
+# Cloud Run injects $PORT — default to 8080
+ENV PORT=8080
+EXPOSE ${PORT}
 
 # Start the API
-CMD uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-7860}
+CMD exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT} --timeout-keep-alive 300
