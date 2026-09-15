@@ -1,25 +1,17 @@
-FROM python:3.10-slim
+FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install system dependencies for scikit-learn, xgboost, etc.
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc g++ libgomp1 && \
-    rm -rf /var/lib/apt/lists/*
+# Install only inference dependencies
+COPY requirements-api.txt .
+RUN pip install --no-cache-dir -r requirements-api.txt
 
-# Install Python dependencies
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Copy application code
+COPY app/ ./app/
+COPY artifacts/ ./artifacts/
 
-# Copy backend code and data
-COPY . .
+# Expose port
+EXPOSE 8000
 
-# Create artifacts directory for model cache
-RUN mkdir -p /app/artifacts
-
-# Cloud Run injects $PORT — default to 8080
-ENV PORT=8080
-EXPOSE ${PORT}
-
-# Start the API
-CMD exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT} --timeout-keep-alive 300
+# Run the API server
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

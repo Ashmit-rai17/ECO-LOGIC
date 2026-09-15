@@ -8,7 +8,8 @@ __pycache__/
 .venv/
 dist/
 build/
-backend/artifacts/*
+backend/artifacts/**/model.json
+backend/artifacts/**/__pycache__/
 !backend/artifacts/.gitkeep
 !backend/data/*.csv
 !backend/data/*.zip
