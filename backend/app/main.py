@@ -127,17 +127,27 @@ def _build_frontend_payload(dataset_key: str) -> dict:
         statistics_obj["autocorrelation"] = {"acf": [], "pacf": []}
 
     # --- forecasting (assemble from multiple artifact fields) ---
+    # Temporal split: train through 2015, valid 2016, test 2017+
+    time_range = overview.get("timeRange", {})
+    data_start = time_range.get("start", "")
+    test_points = forecast_series.get("full", [])
+    test_start = test_points[0].get("timestamp", "") if test_points else ""
+    test_end = test_points[-1].get("timestamp", "") if test_points else ""
     strategy = {
         "train": {
-            "start": overview.get("timeRange", {}).get("start", ""),
-            "end": "",
+            "start": data_start,
+            "end": "2015-12-31T23:00:00",
             "rows": 0,
         },
-        "validation": {"start": "", "end": "", "rows": 0},
+        "validation": {
+            "start": "2016-01-01T00:00:00",
+            "end": "2016-12-31T23:00:00",
+            "rows": 0,
+        },
         "test": {
-            "start": forecast_series.get("full", [{}])[0].get("timestamp", "") if forecast_series.get("full") else "",
-            "end": forecast_series.get("full", [{}])[-1].get("timestamp", "") if forecast_series.get("full") else "",
-            "rows": len(forecast_series.get("full", [])),
+            "start": test_start,
+            "end": test_end,
+            "rows": len(test_points),
         },
     }
 
