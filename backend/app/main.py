@@ -200,12 +200,19 @@ def _build_frontend_payload(dataset_key: str) -> dict:
                 "actual": p.get("actual_demand_mw", 0),
                 "predicted": p.get("expected_demand_mw", 0),
                 "residual": p.get("residual_mw", 0),
+                "zScore": p.get("z_score", 0),
+                "deviationPercent": p.get("deviation_percent", 0),
+                "severity": p.get("severity", p.get("anomaly_flag", "normal")).upper(),
+                "direction": p.get("direction", "POSITIVE" if p.get("residual_mw", 0) > 0 else "NEGATIVE"),
                 "flag": p.get("anomaly_flag", "normal"),
             }
             for p in efficiency.get("points", [])[:800]  # cap for frontend
         ],
         "summary": efficiency.get("summary", {}),
     }
+
+    # --- weather impact ---
+    weather_impact_obj = raw.get("weatherImpact", {})
 
     # --- assemble final payload ---
     return {
@@ -218,6 +225,7 @@ def _build_frontend_payload(dataset_key: str) -> dict:
         "explainability": explainability_obj,
         "errors": errors_obj,
         "efficiency": efficiency_obj,
+        "weatherImpact": weather_impact_obj,
         "summary": summary,
     }
 
@@ -323,6 +331,53 @@ def get_efficiency(dataset_key: str) -> dict:
     return {
         "dataset": dataset_key.upper(),
         "points": efficiency.get("points", []),
+        "summary": efficiency.get("summary", {}),
+    }
+
+
+@app.get("/api/datasets/{dataset_key}/weather-impact")
+def get_weather_impact(dataset_key: str) -> dict:
+    """
+    Return weather impact comparison: demand-only vs weather-enhanced model.
+    """
+    try:
+        data = _load_raw(dataset_key.upper())
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    impact = data.get("weatherImpact", {})
+    return {
+        "dataset": dataset_key.upper(),
+        "weather_available": impact.get("available", False),
+        "impact": impact,
+    }
+
+
+@app.get("/api/datasets/{dataset_key}/anomalies")
+def get_anomalies(dataset_key: str, severity: str = "all") -> dict:
+    """
+    Return anomaly detections for a dataset.
+
+    Args:
+        severity: 'all', 'elevated', 'high', or 'critical'.
+    """
+    try:
+        data = _load_raw(dataset_key.upper())
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    efficiency = data.get("efficiency", {})
+    points = efficiency.get("points", [])
+
+    if severity != "all":
+        severity_upper = severity.upper()
+        points = [p for p in points if p.get("severity", "NORMAL") == severity_upper]
+
+    return {
+        "dataset": dataset_key.upper(),
+        "severity_filter": severity,
+        "count": len(points),
+        "points": points[:200],  # cap for response size
         "summary": efficiency.get("summary", {}),
     }
 

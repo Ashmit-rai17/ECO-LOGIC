@@ -57,8 +57,15 @@ RANDOM_FOREST_PARAMS = {
 # ---------- SHAP ----------
 SHAP_SAMPLE_SIZE = 300
 
-# ---------- Efficiency Intelligence ----------
-ANOMALY_ZSCORE_THRESHOLD = 2.5  # Standard deviations above expected
+# ---------- Anomaly Detection ----------
+# Context-aware thresholds for anomaly severity classification.
+# These are configurable and can be tuned per dataset.
+ANOMALY_ZSCORE_ELEVATED = 1.5   # Slightly above expected demand
+ANOMALY_ZSCORE_HIGH = 2.5       # Significantly above expected
+ANOMALY_ZSCORE_CRITICAL = 3.5   # Extremely unusual demand
+
+# ---------- Weather ----------
+WEATHER_CACHE_DIR = BACKEND_DIR / "data" / "weather_cache"
 
 # ---------- Future Forecasting ----------
 FORECAST_HORIZON_24H = 24   # hours

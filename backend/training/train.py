@@ -38,7 +38,9 @@ from sklearn.linear_model import LinearRegression
 from xgboost import XGBRegressor
 
 from training.config import (
-    ANOMALY_ZSCORE_THRESHOLD,
+    ANOMALY_ZSCORE_CRITICAL,
+    ANOMALY_ZSCORE_ELEVATED,
+    ANOMALY_ZSCORE_HIGH,
     ARTIFACT_VERSION,
     ARTIFACTS_DIR,
     COMPARE_LINEAR_REGRESSION,
@@ -56,6 +58,7 @@ from training.config import (
     WALK_FORWARD_MAX_FOLDS,
     WALK_FORWARD_MIN_TRAIN_YEARS,
     WALK_FORWARD_TEST_YEARS,
+    WEATHER_CACHE_DIR,
     XGB_PARAMS,
 )
 from app.ml.data_loader import DatasetInfo, discover_datasets, load_dataset
@@ -64,6 +67,12 @@ from app.ml.feature_engineering import build_features, feature_catalog
 from app.ml.preprocessing import overview, prepare_time_index
 from app.ml.statistical import seasonality_insights, stationarity
 from app.ml.validation import walk_forward_split
+from app.ml.weather import (
+    DATASET_LOCATIONS,
+    build_weather_features,
+    fetch_weather,
+    weather_feature_catalog,
+)
 
 TARGET = "demand_mw"
 
@@ -355,52 +364,95 @@ def _generate_future_forecast(model, model_df, forecast_hours):
     ]
 
 
-def _generate_efficiency_intelligence(dashboard_df, model_df):
-    """Expected vs actual demand + anomaly detection.
+def _generate_enhanced_efficiency(dashboard_df, model_df):
+    """Enhanced expected-vs-actual demand with context-aware anomaly detection.
 
-    Uses the model's test predictions as 'expected demand'.
-    Residuals > threshold z-scores are flagged as anomalies.
+    Uses hour-of-day + weekday/weekend grouped residual distributions
+    to compute context-aware z-scores, which is more appropriate than
+    a single global std since demand patterns differ by hour and day type.
     """
     actual = dashboard_df["actual"].values
     predicted = dashboard_df["predicted"].values
     residuals = actual - predicted
+    timestamps = dashboard_df.index
 
-    mean_resid = float(np.mean(residuals))
-    std_resid = float(np.std(residuals))
+    # Build context-aware residual statistics
+    # Group residuals by (hour, is_weekend) for context-aware z-scores
+    hours = np.array([ts.hour for ts in timestamps])
+    is_weekend = np.array([ts.dayofweek >= 5 for ts in timestamps], dtype=int)
+    contexts = hours * 2 + is_weekend  # 48 context buckets (24h x 2 day-types)
 
-    anomaly_flags = []
-    for r in residuals:
-        z = (r - mean_resid) / std_resid if std_resid > 0 else 0
-        if z > ANOMALY_ZSCORE_THRESHOLD:
-            flag = "high_anomaly"
-        elif z > 1.5:
-            flag = "elevated_demand"
+    context_stats = {}
+    for ctx in np.unique(contexts):
+        mask = contexts == ctx
+        ctx_residuals = residuals[mask]
+        if len(ctx_residuals) >= 10:
+            context_stats[int(ctx)] = {
+                "mean": float(np.mean(ctx_residuals)),
+                "std": float(np.std(ctx_residuals)) if len(ctx_residuals) > 1 else float(np.std(residuals)),
+                "count": int(len(ctx_residuals)),
+            }
         else:
-            flag = "normal"
-        anomaly_flags.append(flag)
+            context_stats[int(ctx)] = {"mean": 0.0, "std": float(np.std(residuals)), "count": int(len(ctx_residuals))}
 
+    # Global stats (fallback for unknown contexts)
+    global_mean = float(np.mean(residuals))
+    global_std = float(np.std(residuals)) if len(residuals) > 1 else 1.0
+
+    # Classify each observation
     result = []
-    for ts, act, exp, resid, flag in zip(
-        dashboard_df.index, actual, predicted, residuals, anomaly_flags
-    ):
+    for i, (ts, act, exp, resid) in enumerate(zip(timestamps, actual, predicted, residuals)):
+        ctx = int(contexts[i])
+        stats = context_stats.get(ctx, {"mean": global_mean, "std": global_std})
+        ctx_std = stats["std"] if stats["std"] > 0 else global_std
+        z_score = (resid - stats["mean"]) / ctx_std
+        abs_z = abs(z_score)
+
+        # Direction
+        direction = "POSITIVE" if z_score > 0 else "NEGATIVE"
+
+        # Severity classification
+        if abs_z >= ANOMALY_ZSCORE_CRITICAL:
+            severity = "CRITICAL"
+        elif abs_z >= ANOMALY_ZSCORE_HIGH:
+            severity = "HIGH"
+        elif abs_z >= ANOMALY_ZSCORE_ELEVATED:
+            severity = "ELEVATED"
+        else:
+            severity = "NORMAL"
+
+        # Percentage deviation (handle near-zero expected)
+        deviation_pct = 0.0
+        if abs(exp) > 1.0:
+            deviation_pct = ((act - exp) / exp) * 100
+
         result.append({
             "timestamp": ts.isoformat(),
             "actual_demand_mw": float(act),
             "expected_demand_mw": float(exp),
             "residual_mw": float(resid),
-            "anomaly_flag": flag,
+            "z_score": round(float(z_score), 3),
+            "deviation_percent": round(float(deviation_pct), 2),
+            "severity": severity,
+            "direction": direction,
+            "anomaly_flag": severity.lower(),  # backward compat
         })
 
     summary = {
         "total_observations": len(result),
-        "normal": sum(1 for r in result if r["anomaly_flag"] == "normal"),
-        "elevated_demand": sum(1 for r in result if r["anomaly_flag"] == "elevated_demand"),
-        "high_anomaly": sum(1 for r in result if r["anomaly_flag"] == "high_anomaly"),
-        "mean_residual_mw": mean_resid,
-        "std_residual_mw": std_resid,
+        "normal": sum(1 for r in result if r["severity"] == "NORMAL"),
+        "elevated_demand": sum(1 for r in result if r["severity"] == "ELEVATED"),
+        "high_anomaly": sum(1 for r in result if r["severity"] == "HIGH"),
+        "critical_anomaly": sum(1 for r in result if r["severity"] == "CRITICAL"),
+        "mean_residual_mw": global_mean,
+        "std_residual_mw": global_std,
+        "positive_anomalies": sum(1 for r in result if r["severity"] != "NORMAL" and r["direction"] == "POSITIVE"),
+        "negative_anomalies": sum(1 for r in result if r["severity"] != "NORMAL" and r["direction"] == "NEGATIVE"),
+        "max_z_score": round(float(max(abs(r["z_score"]) for r in result)), 3),
+        "max_deviation_percent": round(float(max(abs(r["deviation_percent"]) for r in result)), 2),
     }
 
-    return {"points": result, "summary": summary}
+    return {"points": result, "summary": summary, "contextStats": context_stats}
 
 
 # ──────────────────────────────────────────────
@@ -424,10 +476,33 @@ def train_dataset(info: DatasetInfo) -> dict:
     ov = overview(df, info.key)
     print(f"  Loaded {ov['observations']} observations from {ov['timeRange']['start']} to {ov['timeRange']['end']}")
 
-    # 3. Feature engineering
+    # 3. Feature engineering (demand-only)
     model_df = build_features(df)
     gc.collect()
-    print(f"  Features: {len(model_df.columns)} columns after engineering")
+    demand_only_features = len(model_df.columns)
+    print(f"  Demand-only features: {demand_only_features} columns")
+
+    # 3b. Weather integration
+    weather_available = False
+    weather_impact = {}
+    model_df_weather = None
+    try:
+        data_start = str(df.index.min().date())
+        data_end = str(df.index.max().date())
+        if info.key in DATASET_LOCATIONS:
+            print(f"  Fetching weather for {info.key} ({data_start} to {data_end})...")
+            weather_df = fetch_weather(info.key, data_start, data_end, cache_dir=WEATHER_CACHE_DIR)
+            loc = DATASET_LOCATIONS[info.key]
+            model_df_weather = build_weather_features(
+                model_df, weather_df,
+                t_base_cooling=loc["t_base_cooling"],
+                t_base_heating=loc["t_base_heating"],
+            )
+            weather_available = True
+            print(f"  Weather features: {len(model_df_weather.columns)} total columns (+{len(model_df_weather.columns) - demand_only_features} weather)")
+    except Exception as exc:
+        print(f"  Weather unavailable: {type(exc).__name__}: {exc}")
+    gc.collect()
 
     # 4. Temporal split
     splits = _temporal_split(model_df)
@@ -447,17 +522,59 @@ def train_dataset(info: DatasetInfo) -> dict:
             splits["train"] = splits["train"].iloc[:-len(splits["valid"])]
         print(f"  Fallback split — train: {len(splits['train'])}, valid: {len(splits['valid'])}, test: {len(splits['test'])}")
 
-    # 5. XGBoost training
+    # 5. XGBoost training (demand-only)
     model, train_result = _fit_xgboost(
         splits["train"], splits["valid"], splits["test"]
     )
     test_metrics = train_result["testMetrics"]
-    print(f"  XGBoost test MAE: {test_metrics['mae']:.1f} MW, R²: {test_metrics['r2']:.4f}")
+    print(f"  XGBoost (demand-only) test MAE: {test_metrics['mae']:.1f} MW, R²: {test_metrics['r2']:.4f}")
+
+    # 5b. Weather-enhanced model (ablation experiment)
+    weather_model = None
+    weather_test_metrics = None
+    if weather_available and model_df_weather is not None:
+        try:
+            weather_splits = _temporal_split(model_df_weather)
+            if len(weather_splits["valid"]) > 0 and len(weather_splits["test"]) > 0:
+                weather_model, weather_result = _fit_xgboost(
+                    weather_splits["train"], weather_splits["valid"], weather_splits["test"]
+                )
+                weather_test_metrics = weather_result["testMetrics"]
+                # Compute weather impact
+                abs_improvement = test_metrics["mae"] - weather_test_metrics["mae"]
+                pct_improvement = (abs_improvement / test_metrics["mae"]) * 100
+                weather_impact = {
+                    "available": True,
+                    "demand_only_mae": test_metrics["mae"],
+                    "weather_mae": weather_test_metrics["mae"],
+                    "absolute_improvement": abs_improvement,
+                    "percent_improvement": pct_improvement,
+                    "demand_only_rmse": test_metrics["rmse"],
+                    "weather_rmse": weather_test_metrics["rmse"],
+                    "demand_only_r2": test_metrics["r2"],
+                    "weather_r2": weather_test_metrics["r2"],
+                    "location": DATASET_LOCATIONS.get(info.key, {}),
+                    "weather_features_added": [c for c in model_df_weather.columns if c not in model_df.columns],
+                }
+                print(f"  Weather-enhanced MAE: {weather_test_metrics['mae']:.1f} MW ({pct_improvement:+.1f}% vs demand-only)")
+                del weather_splits
+        except Exception as exc:
+            print(f"  Weather model failed: {type(exc).__name__}: {exc}")
+        gc.collect()
 
     # 6. Model comparison
     comparison = _compare_models(
         splits["train"], splits["valid"], splits["test"], test_metrics
     )
+    # Add weather model to comparison if available
+    if weather_test_metrics and weather_model is not None:
+        comparison.append({
+            "model": "XGBoost + Weather",
+            "type": "Weather-enhanced gradient boosted trees",
+            "status": "trained",
+            **weather_test_metrics,
+            "deltaMaeVsBest": None,
+        })
     print(f"  Compared {len(comparison)} models")
 
     # 7. Walk-forward
@@ -477,9 +594,9 @@ def train_dataset(info: DatasetInfo) -> dict:
     forecast_7d = _generate_future_forecast(model, model_df, FORECAST_HORIZON_7D)
     print(f"  Forecasts: 24h ({len(forecast_24h)} points), 7d ({len(forecast_7d)} points)")
 
-    # 10. Efficiency intelligence
-    efficiency = _generate_efficiency_intelligence(train_result["dashboard"], model_df)
-    print(f"  Efficiency: {efficiency['summary']['high_anomaly']} anomalies, {efficiency['summary']['elevated_demand']} elevated")
+    # 10. Enhanced efficiency intelligence (context-aware anomaly detection)
+    efficiency = _generate_enhanced_efficiency(train_result["dashboard"], model_df)
+    print(f"  Anomalies: {efficiency['summary']['high_anomaly']} high, {efficiency['summary']['elevated_demand']} elevated, {efficiency['summary']['critical_anomaly']} critical")
 
     # 11. Statistics
     stats = stationarity(df)
@@ -507,7 +624,7 @@ def train_dataset(info: DatasetInfo) -> dict:
             "train_period": {"start": str(splits["train"].index.min()), "end": str(splits["train"].index.max()), "rows": len(splits["train"])},
             "validation_period": {"start": str(splits["valid"].index.min()), "end": str(splits["valid"].index.max()), "rows": len(splits["valid"])},
             "test_period": {"start": str(splits["test"].index.min()), "end": str(splits["test"].index.max()), "rows": len(splits["test"])},
-            "weather_features": False,
+            "weather_features": weather_available,
         },
 
         # Metrics
@@ -535,6 +652,9 @@ def train_dataset(info: DatasetInfo) -> dict:
             "trainingCurve": train_result["trainingCurve"],
         },
 
+        # Weather impact (ablation experiment)
+        "weatherImpact": weather_impact,
+
         # Explainability
         "explainability": shap_result,
 
@@ -557,9 +677,9 @@ def train_dataset(info: DatasetInfo) -> dict:
             "seasonalityInsights": seasonality,
         },
 
-        # Features
+        # Features (include weather catalog if available)
         "features": {
-            "catalog": feature_catalog(),
+            "catalog": feature_catalog() + (weather_feature_catalog() if weather_available else []),
             "importance": _feature_importance_list(model, model_df.drop(columns=[TARGET]).columns),
         },
 
@@ -574,7 +694,7 @@ def train_dataset(info: DatasetInfo) -> dict:
         "forecastSeries": forecast_series(train_result["dashboard"], max_points),
 
         # Summary
-        "summary": _project_summary(test_metrics, train_result, seasonality),
+        "summary": _project_summary(test_metrics, train_result, seasonality, weather_impact),
     }
 
     # Save
@@ -617,28 +737,39 @@ def _error_groups(dashboard):
     return {"byHour": grouped("hour"), "byWeekday": grouped("dayofweek"), "byMonth": grouped("month")}
 
 
-def _project_summary(test_metrics, train_result, seasonality):
+def _project_summary(test_metrics, train_result, seasonality, weather_impact=None):
     improvement = train_result["baselineComparison"][0]["mae"] - test_metrics["mae"]
     pct = (improvement / train_result["baselineComparison"][0]["mae"]) * 100
+
+    strengths = [
+        f"XGBoost improves MAE over the lag-1 baseline by {pct:.1f}%.",
+        "Shifted lag and rolling features capture hourly, daily, and weekly demand memory without target leakage.",
+        f"The test WMAPE is {test_metrics['wmape']:.2f}%, which is easy to communicate to non-technical readers.",
+        "Walk-forward validation provides robust multi-fold performance estimates.",
+    ]
+    limitations = [
+        "Recursive multi-step forecasting accumulates prediction error over longer horizons.",
+        "Potential demand anomalies are based on statistical residuals, not physical energy audit data.",
+        "SHAP values indicate feature contribution to model output, not proven causal factors.",
+    ]
+    future_improvements = [
+        "Implement Optuna hyperparameter tuning for production-grade model selection.",
+        "Add holiday and special event indicators for demand pattern modeling.",
+    ]
+
+    if weather_impact and weather_impact.get("available"):
+        imp = weather_impact["percent_improvement"]
+        strengths.append(f"Weather-enhanced model improves MAE by {imp:.1f}% over demand-only.")
+        limitations.append("Weather data is sourced from reanalysis; local microclimate may differ.")
+        limitations.append("Future forecasts cannot use unknown future weather; weather features are omitted for genuine future predictions.")
+    else:
+        future_improvements.insert(0, "Integrate weather data (temperature, HDD/CDD) for exogenous forecasting features.")
+
     return {
         "observations": seasonality,
-        "strengths": [
-            f"XGBoost improves MAE over the lag-1 baseline by {pct:.1f}%.",
-            "Shifted lag and rolling features capture hourly, daily, and weekly demand memory without target leakage.",
-            f"The test WMAPE is {test_metrics['wmape']:.2f}%, which is easy to communicate to non-technical readers.",
-            "Walk-forward validation provides robust multi-fold performance estimates.",
-        ],
-        "limitations": [
-            "The current model uses demand history only; weather, holidays, and market context are not included.",
-            "Recursive multi-step forecasting accumulates prediction error over longer horizons.",
-            "Potential inefficiency signals are based on statistical residuals, not physical energy audit data.",
-        ],
-        "futureImprovements": [
-            "Integrate weather data (temperature, humidity, solar irradiance) for exogenous features.",
-            "Add HDD/CDD (Heating/Cooling Degree Hours) for weather-demand relationships.",
-            "Compare demand-only vs weather-enhanced models with proper A/B evaluation.",
-            "Implement Optuna hyperparameter tuning for production-grade model selection.",
-        ],
+        "strengths": strengths,
+        "limitations": limitations,
+        "futureImprovements": future_improvements,
     }
 
 

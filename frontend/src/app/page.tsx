@@ -4,9 +4,11 @@ import { useMemo, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import {
   Activity,
+  AlertTriangle,
   BarChart3,
   Brain,
   ChartNoAxesCombined,
+  Cloud,
   Database,
   FileText,
   LineChart,
@@ -23,6 +25,8 @@ const navItems = [
   { id: "overview", label: "Overview", icon: Database },
   { id: "time-series", label: "Time Series", icon: LineChart },
   { id: "statistics", label: "Statistics", icon: Activity },
+  { id: "weather", label: "Weather", icon: Cloud },
+  { id: "anomalies", label: "Anomalies", icon: AlertTriangle },
   { id: "features", label: "Features", icon: SlidersHorizontal },
   { id: "forecasting", label: "Forecasting", icon: ChartNoAxesCombined },
   { id: "explainability", label: "Explainability", icon: Brain },
@@ -47,6 +51,10 @@ export default function Home() {
         return <Statistics data={analytics} />;
       case "features":
         return <Features data={analytics} />;
+      case "weather":
+        return <WeatherIntelligence data={analytics} />;
+      case "anomalies":
+        return <AnomalyDetection data={analytics} />;
       case "forecasting":
         return <Forecasting data={analytics} />;
       case "explainability":
@@ -295,6 +303,195 @@ function Features({ data }: { data: NonNullable<ReturnType<typeof useAnalytics>[
           data={[{ x: data.features.importance.slice(0, 15).map((p) => p.importance), y: data.features.importance.slice(0, 15).map((p) => p.feature), type: "bar", orientation: "h" }]}
           layout={{ title: "Top Feature Importance", yaxis: { automargin: true } }}
         />
+      </Card>
+    </Section>
+  );
+}
+
+function WeatherIntelligence({ data }: { data: NonNullable<ReturnType<typeof useAnalytics>["analytics"]> }) {
+  const impact = data.weatherImpact;
+  const available = impact?.available ?? false;
+
+  return (
+    <Section title="Weather Intelligence" description="Impact of weather features on electricity demand forecasting.">
+      {available ? (
+        <>
+          <div className="grid gap-4 md:grid-cols-3">
+            <Kpi
+              label="Demand-Only MAE"
+              value={`${formatNumber(impact.demand_only_mae ?? 0)} MW`}
+            />
+            <Kpi
+              label="Weather-Enhanced MAE"
+              value={`${formatNumber(impact.weather_mae ?? 0)} MW`}
+              hint={`${((impact.percent_improvement ?? 0) >= 0 ? "+" : "")}${formatNumber(impact.percent_improvement ?? 0)}% improvement`}
+            />
+            <Kpi
+              label="Absolute Improvement"
+              value={`${formatNumber(impact.absolute_improvement ?? 0)} MW`}
+            />
+          </div>
+          <div className="grid gap-4 md:grid-cols-3">
+            <Kpi label="Demand-Only R²" value={formatNumber(impact.demand_only_r2 ?? 0, 4)} />
+            <Kpi label="Weather R²" value={formatNumber(impact.weather_r2 ?? 0, 4)} />
+            <Kpi
+              label="Region"
+              value={impact.location?.region ?? "N/A"}
+              hint={`${impact.location?.latitude ?? 0}°N, ${impact.location?.longitude ?? 0}°W`}
+            />
+          </div>
+          <Card>
+            <Plot
+              data={[
+                {
+                  x: ["Demand-Only", "Weather-Enhanced"],
+                  y: [impact.demand_only_mae ?? 0, impact.weather_mae ?? 0],
+                  type: "bar",
+                  name: "MAE",
+                  marker: { color: ["#3e4851", "#00aaff"] },
+                },
+              ]}
+              layout={{ title: "MAE Comparison: Demand-Only vs Weather-Enhanced", yaxis: { title: "MAE (MW)" } }}
+              height={300}
+            />
+          </Card>
+          <Card>
+            <h3 className="mb-2 font-display text-lg font-bold uppercase text-[#016e00]">Weather Features Added</h3>
+            <div className="flex flex-wrap gap-2">
+              {(impact.weather_features_added ?? []).map((f) => (
+                <span key={f} className="border-2 border-[#141d21] bg-[#f4faff] px-2 py-1 text-xs font-bold text-[#016e00]">
+                  {f}
+                </span>
+              ))}
+            </div>
+          </Card>
+        </>
+      ) : (
+        <Card>
+          <div className="text-center">
+            <Cloud size={48} className="mx-auto mb-3 text-[#3e4851] opacity-40" />
+            <p className="font-display text-lg font-bold uppercase text-[#3e4851]">Weather data unavailable</p>
+            <p className="mt-2 text-sm text-[#3e4851]">
+              Weather integration requires retraining with weather features.
+              Run the training pipeline with weather enabled to generate this comparison.
+            </p>
+          </div>
+        </Card>
+      )}
+    </Section>
+  );
+}
+
+function AnomalyDetection({ data }: { data: NonNullable<ReturnType<typeof useAnalytics>["analytics"]> }) {
+  const efficiency = data.efficiency;
+  const points = efficiency.points;
+  const summary = efficiency.summary;
+
+  // Separate anomalies by severity
+  const anomalies = points.filter((p) => p.severity !== "NORMAL");
+  const critical = anomalies.filter((p) => p.severity === "CRITICAL");
+  const high = anomalies.filter((p) => p.severity === "HIGH");
+  const elevated = anomalies.filter((p) => p.severity === "ELEVATED");
+
+  return (
+    <Section title="Demand Anomaly Detection" description="Expected vs actual demand analysis using context-aware anomaly scoring.">
+      <div className="grid gap-4 md:grid-cols-4">
+        <Kpi label="Total Observations" value={formatNumber(summary.total_observations ?? 0, 0)} />
+        <Kpi label="Normal" value={formatNumber(summary.normal ?? 0, 0)} />
+        <Kpi label="Elevated" value={formatNumber(summary.elevated_demand ?? 0, 0)} />
+        <Kpi label="High / Critical" value={`${formatNumber(summary.high_anomaly ?? 0, 0)} / ${formatNumber(summary.critical_anomaly ?? 0, 0)}`} />
+      </div>
+      <div className="grid gap-4 md:grid-cols-3">
+        <Kpi label="Positive Anomalies" value={formatNumber(summary.positive_anomalies ?? 0, 0)} hint="Demand higher than expected" />
+        <Kpi label="Negative Anomalies" value={formatNumber(summary.negative_anomalies ?? 0, 0)} hint="Demand lower than expected" />
+        <Kpi label="Max Z-Score" value={formatNumber(summary.max_z_score ?? 0, 2)} />
+      </div>
+
+      {/* Anomaly Timeline */}
+      <Card>
+        <Plot
+          data={[
+            {
+              x: points.map((p) => p.timestamp),
+              y: points.map((p) => p.actual),
+              type: "scatter",
+              mode: "lines",
+              name: "Actual Demand",
+              line: { color: "#141d21", width: 1 },
+            },
+            {
+              x: points.map((p) => p.timestamp),
+              y: points.map((p) => p.predicted),
+              type: "scatter",
+              mode: "lines",
+              name: "Expected Demand",
+              line: { color: "#00aaff", width: 1, dash: "dot" },
+            },
+            {
+              x: critical.map((p) => p.timestamp),
+              y: critical.map((p) => p.actual),
+              type: "scatter",
+              mode: "markers",
+              name: "Critical",
+              marker: { color: "#ba1a1a", size: 6, symbol: "diamond" },
+            },
+            {
+              x: high.map((p) => p.timestamp),
+              y: high.map((p) => p.actual),
+              type: "scatter",
+              mode: "markers",
+              name: "High",
+              marker: { color: "#f59e0b", size: 5, symbol: "triangle-up" },
+            },
+            {
+              x: elevated.map((p) => p.timestamp),
+              y: elevated.map((p) => p.actual),
+              type: "scatter",
+              mode: "markers",
+              name: "Elevated",
+              marker: { color: "#6366f1", size: 4, symbol: "circle" },
+            },
+          ]}
+          layout={{
+            title: "Actual vs Expected Demand with Anomaly Markers",
+            yaxis: { title: "Demand (MW)" },
+          }}
+          height={400}
+        />
+      </Card>
+
+      {/* Z-Score Distribution */}
+      <Card>
+        <Plot
+          data={[{ x: points.map((p) => p.zScore), type: "histogram", name: "Z-Score" }]}
+          layout={{ title: "Anomaly Score Distribution", xaxis: { title: "Z-Score" } }}
+          height={300}
+        />
+      </Card>
+
+      {/* Worst Anomalies Table */}
+      <Card>
+        <h3 className="mb-3 font-display text-lg font-bold uppercase text-[#016e00]">Top Anomalies</h3>
+        <SimpleTable
+          columns={["Timestamp", "Actual", "Expected", "Deviation %", "Z-Score", "Severity", "Direction"]}
+          rows={anomalies
+            .sort((a, b) => Math.abs(b.zScore) - Math.abs(a.zScore))
+            .slice(0, 20)
+            .map((p) => ({
+              Timestamp: new Date(p.timestamp).toLocaleDateString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }),
+              Actual: `${formatNumber(p.actual)} MW`,
+              Expected: `${formatNumber(p.predicted)} MW`,
+              "Deviation %": `${p.deviationPercent > 0 ? "+" : ""}${formatNumber(p.deviationPercent)}%`,
+              "Z-Score": formatNumber(p.zScore, 2),
+              Severity: p.severity,
+              Direction: `${p.direction === "POSITIVE" ? "↑ HIGH" : "↓ LOW"}`,
+            }))}
+        />
+        <p className="mt-3 text-xs text-[#3e4851]">
+          Z-scores are computed context-aware: residuals are standardized relative to the
+          historical residual distribution for the same hour-of-day and weekday/weekend type.
+          Severity thresholds: Elevated ≥ 1.5σ, High ≥ 2.5σ, Critical ≥ 3.5σ.
+        </p>
       </Card>
     </Section>
   );

@@ -10,7 +10,7 @@ class Settings(BaseSettings):
     data_dir: Path = BACKEND_DIR / "data"
     artifacts_dir: Path = BACKEND_DIR / "artifacts"
     cache_enabled: bool = True
-    cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
+    cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000,http://localhost:3001,http://127.0.0.1:3001"
     max_points: int = 800
     shap_sample_size: int = 100
     xgb_n_estimators: int = 200

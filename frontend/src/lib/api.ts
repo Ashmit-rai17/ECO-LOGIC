@@ -55,6 +55,32 @@ export async function fetchPrediction(
 
 export type Point = Record<string, number | string>;
 
+export type WeatherImpact = {
+  available: boolean;
+  demand_only_mae?: number;
+  weather_mae?: number;
+  absolute_improvement?: number;
+  percent_improvement?: number;
+  demand_only_rmse?: number;
+  weather_rmse?: number;
+  demand_only_r2?: number;
+  weather_r2?: number;
+  location?: { latitude: number; longitude: number; timezone: string; region: string };
+  weather_features_added?: string[];
+};
+
+export type EfficiencyPoint = {
+  timestamp: string;
+  actual: number;
+  predicted: number;
+  residual: number;
+  zScore: number;
+  deviationPercent: number;
+  severity: string;
+  direction: string;
+  flag: string;
+};
+
 export type AnalyticsPayload = {
   dataset: Dataset;
   overview: {
@@ -121,6 +147,11 @@ export type AnalyticsPayload = {
     heatmap: { x: number[]; y: number[]; z: number[][] };
     series: { full: Point[]; zoom: Point[]; worstPredictions: Point[] };
   };
+  efficiency: {
+    points: EfficiencyPoint[];
+    summary: Record<string, number>;
+  };
+  weatherImpact: WeatherImpact;
   summary: {
     observations: string[];
     strengths: string[];
