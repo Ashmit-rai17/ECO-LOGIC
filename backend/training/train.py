@@ -90,6 +90,30 @@ def _temporal_split(model_df: pd.DataFrame) -> dict:
     }
 
 
+def _get_splits(model_df: pd.DataFrame) -> dict:
+    """Temporal split with fallback for short datasets (e.g. NI ends 2011).
+
+    Datasets that don't reach the standard validation/test windows fall back
+    to a chronological 80/10/10 split so the pipeline still produces an
+    honest out-of-sample evaluation. Used by BOTH the demand-only and the
+    weather-enhanced paths so the ablation comparison stays apples-to-apples.
+    """
+    splits = _temporal_split(model_df)
+    if len(splits["valid"]) == 0 or len(splits["test"]) == 0:
+        print("  WARNING: Insufficient data for standard split. Using last 20% as test.")
+        cutoff = int(len(model_df) * 0.8)
+        splits = {
+            "train": model_df.iloc[:cutoff],
+            "valid": model_df.iloc[cutoff:cutoff + int(len(model_df) * 0.1)],
+            "test": model_df.iloc[cutoff + int(len(model_df) * 0.1):],
+        }
+        if len(splits["valid"]) == 0:
+            splits["valid"] = splits["train"].tail(int(len(splits["train"]) * 0.2))
+            splits["train"] = splits["train"].iloc[:-len(splits["valid"])]
+        print(f"  Fallback split — train: {len(splits['train'])}, valid: {len(splits['valid'])}, test: {len(splits['test'])}")
+    return splits
+
+
 def _fit_xgboost(train_df, valid_df, test_df, params=None):
     """Train XGBoost and return model + metrics on test set."""
     p = dict(params or XGB_PARAMS)
@@ -508,19 +532,7 @@ def train_dataset(info: DatasetInfo) -> dict:
     splits = _temporal_split(model_df)
     print(f"  Split — train: {len(splits['train'])}, valid: {len(splits['valid'])}, test: {len(splits['test'])}")
 
-    # Handle short datasets (e.g. NI ends 2011 — no valid/test)
-    if len(splits["valid"]) == 0 or len(splits["test"]) == 0:
-        print(f"  WARNING: Insufficient data for standard split. Using last 20% as test.")
-        cutoff = int(len(model_df) * 0.8)
-        splits = {
-            "train": model_df.iloc[:cutoff],
-            "valid": model_df.iloc[cutoff:cutoff + int(len(model_df) * 0.1)],
-            "test": model_df.iloc[cutoff + int(len(model_df) * 0.1):],
-        }
-        if len(splits["valid"]) == 0:
-            splits["valid"] = splits["train"].tail(int(len(splits["train"]) * 0.2))
-            splits["train"] = splits["train"].iloc[:-len(splits["valid"])]
-        print(f"  Fallback split — train: {len(splits['train'])}, valid: {len(splits['valid'])}, test: {len(splits['test'])}")
+    splits = _get_splits(model_df)
 
     # 5. XGBoost training (demand-only)
     model, train_result = _fit_xgboost(
@@ -534,7 +546,7 @@ def train_dataset(info: DatasetInfo) -> dict:
     weather_test_metrics = None
     if weather_available and model_df_weather is not None:
         try:
-            weather_splits = _temporal_split(model_df_weather)
+            weather_splits = _get_splits(model_df_weather)
             if len(weather_splits["valid"]) > 0 and len(weather_splits["test"]) > 0:
                 weather_model, weather_result = _fit_xgboost(
                     weather_splits["train"], weather_splits["valid"], weather_splits["test"]
